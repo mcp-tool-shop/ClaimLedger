@@ -1,3 +1,8 @@
+> ⚠️ **This repository has moved to [ledger-suite](https://github.com/mcp-tool-shop/ledger-suite)**
+> Source now lives at: `src/ClaimLedger/`
+
+---
+
 # ClaimLedger
 
 **Cryptographic provenance for scientific claims.**
