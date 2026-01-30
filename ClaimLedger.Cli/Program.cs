@@ -1,9 +1,11 @@
 using System.CommandLine;
+using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using ClaimLedger.Application.Attestations;
 using ClaimLedger.Application.Citations;
 using ClaimLedger.Application.Export;
 using ClaimLedger.Application.Revocations;
+using ClaimLedger.Application.Timestamps;
 using ClaimLedger.Cli.Verification;
 using ClaimLedger.Domain.Attestations;
 using ClaimLedger.Domain.Citations;
@@ -33,6 +35,9 @@ public static class Program
         rootCommand.AddCommand(CreateRevokeKeyCommand());
         rootCommand.AddCommand(CreateRevocationsCommand());
         rootCommand.AddCommand(CreateWitnessCommand());
+        rootCommand.AddCommand(CreateTsaRequestCommand());
+        rootCommand.AddCommand(CreateTsaAttachCommand());
+        rootCommand.AddCommand(CreateTimestampsCommand());
 
         return await rootCommand.InvokeAsync(args);
     }
@@ -71,6 +76,18 @@ public static class Program
             "--strict-revocations",
             "Fail if any signer key is revoked");
 
+        var tsaOption = new Option<bool>(
+            "--tsa",
+            "Also verify RFC 3161 timestamp receipts");
+
+        var tsaTrustDirOption = new Option<DirectoryInfo?>(
+            "--tsa-trust-dir",
+            "Directory containing TSA trust anchors (certificates)");
+
+        var strictTsaOption = new Option<bool>(
+            "--strict-tsa",
+            "Fail if any TSA receipt is untrusted or invalid");
+
         var command = new Command("verify", "Verify a claim bundle's cryptographic validity")
         {
             bundleArg,
@@ -80,7 +97,10 @@ public static class Program
             strictCitationsOption,
             claimDirOption,
             revocationsDirOption,
-            strictRevocationsOption
+            strictRevocationsOption,
+            tsaOption,
+            tsaTrustDirOption,
+            strictTsaOption
         };
 
         command.SetHandler(async context =>
@@ -93,9 +113,12 @@ public static class Program
             var claimDir = context.ParseResult.GetValueForOption(claimDirOption);
             var revocationsDir = context.ParseResult.GetValueForOption(revocationsDirOption);
             var strictRevocations = context.ParseResult.GetValueForOption(strictRevocationsOption);
+            var verifyTsa = context.ParseResult.GetValueForOption(tsaOption);
+            var tsaTrustDir = context.ParseResult.GetValueForOption(tsaTrustDirOption);
+            var strictTsa = context.ParseResult.GetValueForOption(strictTsaOption);
 
             var exitCode = await VerifyBundle(bundle, evidenceDir, verifyAttestations, verifyCitations,
-                strictCitations, claimDir, revocationsDir, strictRevocations);
+                strictCitations, claimDir, revocationsDir, strictRevocations, verifyTsa, tsaTrustDir, strictTsa);
             context.ExitCode = exitCode;
         });
 
@@ -195,7 +218,10 @@ public static class Program
         bool strictCitations = false,
         DirectoryInfo? claimDir = null,
         DirectoryInfo? revocationsDir = null,
-        bool strictRevocations = false)
+        bool strictRevocations = false,
+        bool verifyTsa = false,
+        DirectoryInfo? tsaTrustDir = null,
+        bool strictTsa = false)
     {
         if (!bundleFile.Exists)
         {
@@ -364,6 +390,52 @@ public static class Program
                     Console.WriteLine("  \u2718 One or more signer keys are revoked");
                     return 6; // REVOKED - cryptographically valid but signer key revoked
                 }
+            }
+
+            // Verify TSA timestamp receipts if requested
+            if (verifyTsa && bundle.TimestampReceipts != null && bundle.TimestampReceipts.Count > 0)
+            {
+                // Load trust anchors if provided
+                X509Certificate2Collection? trustAnchors = null;
+                if (tsaTrustDir != null && tsaTrustDir.Exists)
+                {
+                    trustAnchors = TsaTrustVerifier.LoadCertificatesFromDirectory(tsaTrustDir.FullName);
+                }
+
+                var tsaResult = VerifyTimestampsHandler.Handle(
+                    new VerifyTimestampsQuery(bundle, trustAnchors, strictTsa));
+
+                Console.WriteLine();
+                Console.WriteLine($"  Timestamps: {bundle.TimestampReceipts.Count}");
+
+                foreach (var check in tsaResult.Results)
+                {
+                    var status = check.IsValid ? "\u2714" : "\u2718";
+                    var trustStatus = check.IsTrusted ? "trusted" : "untrusted";
+                    var info = check.IsValid ? $"{check.IssuedAt:O} ({trustStatus})" : check.Error;
+                    Console.WriteLine($"    {status} {Truncate(check.ReceiptId, 8)}... {info}");
+                    if (!string.IsNullOrEmpty(check.Warning))
+                    {
+                        Console.WriteLine($"      \u26A0 {check.Warning}");
+                    }
+                }
+
+                if (tsaResult.EarliestTrustedTimestamp.HasValue)
+                {
+                    Console.WriteLine($"    Earliest trusted: {tsaResult.EarliestTrustedTimestamp.Value:O}");
+                }
+
+                if (!tsaResult.AllValid)
+                {
+                    Console.WriteLine();
+                    Console.WriteLine("  \u2718 One or more timestamp receipts failed verification");
+                    return 3; // BROKEN - invalid timestamp receipt
+                }
+            }
+            else if (verifyTsa)
+            {
+                Console.WriteLine();
+                Console.WriteLine("  Timestamps: none");
             }
 
             foreach (var warning in result.Warnings)
@@ -1514,6 +1586,310 @@ public static class Program
 
     private static string Truncate(string s, int maxLength)
         => s.Length <= maxLength ? s : s[..maxLength];
+
+    private static Command CreateTsaRequestCommand()
+    {
+        var bundleArg = new Argument<FileInfo>("bundle", "Path to claim bundle JSON file");
+
+        var outputOption = new Option<FileInfo?>(
+            "--out",
+            "Output path for timestamp request (.tsq file)");
+        outputOption.AddAlias("-o");
+
+        var nonceOption = new Option<string?>(
+            "--nonce",
+            "Optional nonce (hex) for the request");
+
+        var noCertReqOption = new Option<bool>(
+            "--no-cert-req",
+            "Don't request the TSA to include its certificate in the response");
+
+        var command = new Command("tsa-request", "Create an RFC 3161 timestamp request for a claim")
+        {
+            bundleArg,
+            outputOption,
+            nonceOption,
+            noCertReqOption
+        };
+
+        command.SetHandler(async context =>
+        {
+            var bundle = context.ParseResult.GetValueForArgument(bundleArg);
+            var output = context.ParseResult.GetValueForOption(outputOption);
+            var nonceHex = context.ParseResult.GetValueForOption(nonceOption);
+            var noCertReq = context.ParseResult.GetValueForOption(noCertReqOption);
+
+            var exitCode = await CreateTsaRequest(bundle, output, nonceHex, noCertReq);
+            context.ExitCode = exitCode;
+        });
+
+        return command;
+    }
+
+    private static async Task<int> CreateTsaRequest(
+        FileInfo bundleFile,
+        FileInfo? outputFile,
+        string? nonceHex,
+        bool noCertReq)
+    {
+        // Read bundle
+        if (!bundleFile.Exists)
+        {
+            Console.WriteLine($"Error: Bundle file not found: {bundleFile.FullName}");
+            return 4;
+        }
+
+        ClaimBundle bundle;
+        try
+        {
+            var bundleJson = await File.ReadAllTextAsync(bundleFile.FullName);
+            bundle = JsonSerializer.Deserialize<ClaimBundle>(bundleJson)
+                ?? throw new JsonException("Bundle is null");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error reading bundle: {ex.Message}");
+            return 5;
+        }
+
+        // Parse nonce if provided
+        byte[]? nonce = null;
+        if (!string.IsNullOrEmpty(nonceHex))
+        {
+            try
+            {
+                nonce = Convert.FromHexString(nonceHex);
+            }
+            catch
+            {
+                Console.WriteLine($"Error: Invalid nonce hex: {nonceHex}");
+                return 4;
+            }
+        }
+
+        // Create the request
+        var requestBytes = CreateTsaRequestHandler.Handle(new CreateTsaRequestCommand(
+            bundle,
+            IncludeCertRequest: !noCertReq,
+            Nonce: nonce));
+
+        // Determine output path
+        var outputPath = outputFile?.FullName
+            ?? Path.Combine(
+                Path.GetDirectoryName(bundleFile.FullName) ?? ".",
+                Path.GetFileNameWithoutExtension(bundleFile.Name) + ".tsq");
+
+        // Write output
+        try
+        {
+            await File.WriteAllBytesAsync(outputPath, requestBytes);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error writing output: {ex.Message}");
+            return 5;
+        }
+
+        var digest = ClaimCoreDigest.Compute(bundle);
+
+        Console.WriteLine($"\u2714 TSA request created");
+        Console.WriteLine($"  Digest:  {Truncate(digest.ToString(), 16)}...");
+        Console.WriteLine($"  Size:    {requestBytes.Length} bytes");
+        Console.WriteLine($"  Output:  {outputPath}");
+        Console.WriteLine();
+        Console.WriteLine("  Send this .tsq file to a TSA service (e.g., FreeTSA, DigiCert)");
+        Console.WriteLine("  Then attach the response with: claimledger tsa-attach");
+
+        return 0;
+    }
+
+    private static Command CreateTsaAttachCommand()
+    {
+        var bundleArg = new Argument<FileInfo>("bundle", "Path to claim bundle JSON file");
+
+        var tokenOption = new Option<FileInfo>(
+            "--token",
+            "Path to TSA response token file (.tsr)")
+        { IsRequired = true };
+        tokenOption.AddAlias("-t");
+
+        var outputOption = new Option<FileInfo?>(
+            "--out",
+            "Output path for bundle with timestamp (default: <input>.tsa.json)");
+        outputOption.AddAlias("-o");
+
+        var command = new Command("tsa-attach", "Attach an RFC 3161 timestamp token to a claim")
+        {
+            bundleArg,
+            tokenOption,
+            outputOption
+        };
+
+        command.SetHandler(async context =>
+        {
+            var bundle = context.ParseResult.GetValueForArgument(bundleArg);
+            var token = context.ParseResult.GetValueForOption(tokenOption)!;
+            var output = context.ParseResult.GetValueForOption(outputOption);
+
+            var exitCode = await AttachTsaToken(bundle, token, output);
+            context.ExitCode = exitCode;
+        });
+
+        return command;
+    }
+
+    private static async Task<int> AttachTsaToken(
+        FileInfo bundleFile,
+        FileInfo tokenFile,
+        FileInfo? outputFile)
+    {
+        // Read bundle
+        if (!bundleFile.Exists)
+        {
+            Console.WriteLine($"Error: Bundle file not found: {bundleFile.FullName}");
+            return 4;
+        }
+
+        ClaimBundle bundle;
+        try
+        {
+            var bundleJson = await File.ReadAllTextAsync(bundleFile.FullName);
+            bundle = JsonSerializer.Deserialize<ClaimBundle>(bundleJson)
+                ?? throw new JsonException("Bundle is null");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error reading bundle: {ex.Message}");
+            return 5;
+        }
+
+        // Read token
+        if (!tokenFile.Exists)
+        {
+            Console.WriteLine($"Error: Token file not found: {tokenFile.FullName}");
+            return 4;
+        }
+
+        byte[] tokenBytes;
+        try
+        {
+            tokenBytes = await File.ReadAllBytesAsync(tokenFile.FullName);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error reading token: {ex.Message}");
+            return 5;
+        }
+
+        // Attach the token
+        var result = AttachTsaTokenHandler.Handle(new AttachTsaTokenCommand(bundle, tokenBytes));
+
+        if (!result.Success)
+        {
+            Console.WriteLine($"\u2718 Failed to attach token");
+            Console.WriteLine($"  {result.Error}");
+            return 3;
+        }
+
+        // Add receipt to bundle
+        var newBundle = AddTimestampToBundleHandler.Handle(
+            new AddTimestampToBundleCommand(bundle, result.Receipt!));
+
+        // Determine output path
+        var outputPath = outputFile?.FullName
+            ?? Path.Combine(
+                Path.GetDirectoryName(bundleFile.FullName) ?? ".",
+                Path.GetFileNameWithoutExtension(bundleFile.Name) + ".tsa.json");
+
+        // Write output
+        try
+        {
+            var outputJson = JsonSerializer.Serialize(newBundle, JsonOptions);
+            await File.WriteAllTextAsync(outputPath, outputJson);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error writing output: {ex.Message}");
+            return 5;
+        }
+
+        var receipt = result.Receipt!;
+        Console.WriteLine($"\u2714 Timestamp attached");
+        Console.WriteLine($"  ID:        {receipt.ReceiptId}");
+        Console.WriteLine($"  Issued At: {receipt.IssuedAt:O}");
+        Console.WriteLine($"  TSA:       {receipt.Tsa.CertSubject ?? "Unknown"}");
+        Console.WriteLine($"  Output:    {outputPath}");
+
+        return 0;
+    }
+
+    private static Command CreateTimestampsCommand()
+    {
+        var bundleArg = new Argument<FileInfo>("bundle", "Path to claim bundle JSON file");
+
+        var command = new Command("timestamps", "List RFC 3161 timestamp receipts in a claim bundle")
+        {
+            bundleArg
+        };
+
+        command.SetHandler(async (FileInfo bundle) =>
+        {
+            var exitCode = await ListTimestamps(bundle);
+            Environment.ExitCode = exitCode;
+        }, bundleArg);
+
+        return command;
+    }
+
+    private static async Task<int> ListTimestamps(FileInfo bundleFile)
+    {
+        if (!bundleFile.Exists)
+        {
+            Console.WriteLine($"Error: Bundle file not found: {bundleFile.FullName}");
+            return 4;
+        }
+
+        ClaimBundle bundle;
+        try
+        {
+            var bundleJson = await File.ReadAllTextAsync(bundleFile.FullName);
+            bundle = JsonSerializer.Deserialize<ClaimBundle>(bundleJson)
+                ?? throw new JsonException("Bundle is null");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error reading bundle: {ex.Message}");
+            return 5;
+        }
+
+        Console.WriteLine($"Claim: {Truncate(bundle.Claim.ClaimId, 8)}...");
+        Console.WriteLine($"  {Truncate(bundle.Claim.Statement, 60)}");
+        Console.WriteLine();
+
+        if (bundle.TimestampReceipts == null || bundle.TimestampReceipts.Count == 0)
+        {
+            Console.WriteLine("Timestamps: none");
+            return 0;
+        }
+
+        Console.WriteLine($"Timestamps: {bundle.TimestampReceipts.Count}");
+        Console.WriteLine();
+
+        foreach (var receipt in bundle.TimestampReceipts)
+        {
+            Console.WriteLine($"  [{receipt.Contract}] {Truncate(receipt.ReceiptId, 8)}...");
+            Console.WriteLine($"    Issued At: {receipt.IssuedAt}");
+            Console.WriteLine($"    Digest:    {Truncate(receipt.Subject.DigestHex, 16)}...");
+            Console.WriteLine($"    Imprint:   {Truncate(receipt.MessageImprintHex, 16)}...");
+            if (!string.IsNullOrEmpty(receipt.Tsa.PolicyOid))
+                Console.WriteLine($"    Policy:    {receipt.Tsa.PolicyOid}");
+            if (!string.IsNullOrEmpty(receipt.Tsa.CertFingerprintSha256Hex))
+                Console.WriteLine($"    Cert:      {Truncate(receipt.Tsa.CertFingerprintSha256Hex, 16)}...");
+            Console.WriteLine();
+        }
+
+        return 0;
+    }
 }
 
 /// <summary>

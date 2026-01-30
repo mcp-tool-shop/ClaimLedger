@@ -33,6 +33,9 @@ claimledger verify claim.json --revocations-dir ./revocations/
 # Strict mode: fail if any signer key is revoked
 claimledger verify claim.json --revocations-dir ./revocations/ --strict-revocations
 
+# Verify RFC 3161 timestamp receipts
+claimledger verify claim.json --tsa --tsa-trust-dir ./tsa-certs/
+
 # Inspect bundle contents
 claimledger inspect claim.json
 ```
@@ -55,8 +58,8 @@ ClaimLedger.sln
 ├── ClaimLedger.Domain     ← Claims, Evidence, Citations, Attestations, Revocations
 ├── ClaimLedger.Application← Commands, verification, bundle export
 ├── ClaimLedger.Infrastructure ← (empty)
-├── ClaimLedger.Cli        ← verify / inspect / attest / cite / revoke / witness commands
-└── ClaimLedger.Tests      ← 137 tests
+├── ClaimLedger.Cli        ← verify / inspect / attest / cite / revoke / witness / tsa commands
+└── ClaimLedger.Tests      ← 159 tests
 ```
 
 ## Claim Bundle Format
@@ -204,6 +207,34 @@ claimledger witness claim.json \
 Witness timestamps are `WITNESSED_AT` attestations that bind to the claim's `claim_core_digest`.
 
 See [docs/timestamping.md](docs/timestamping.md) for detailed timestamping semantics.
+
+## RFC 3161 Timestamps
+
+Attach RFC 3161 timestamp tokens from external Timestamp Authorities:
+
+```bash
+# Create a timestamp request
+claimledger tsa-request claim.json --out claim.tsq
+
+# Send to TSA (e.g., FreeTSA)
+curl -H "Content-Type: application/timestamp-query" \
+     --data-binary @claim.tsq \
+     https://freetsa.org/tsr -o claim.tsr
+
+# Attach the token
+claimledger tsa-attach claim.json --token claim.tsr --out claim.tsa.json
+
+# Verify with TSA receipts
+claimledger verify claim.tsa.json --tsa
+
+# Verify with trust validation
+claimledger verify claim.tsa.json --tsa --tsa-trust-dir ./tsa-certs/ --strict-tsa
+
+# List timestamps
+claimledger timestamps claim.tsa.json
+```
+
+See [docs/rfc3161.md](docs/rfc3161.md) for detailed RFC 3161 semantics.
 
 ## What This Is Not
 

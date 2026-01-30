@@ -37,6 +37,14 @@ public sealed class ClaimBundle
     [JsonPropertyOrder(5)]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<AttestationInfo>? Attestations { get; init; }
+
+    /// <summary>
+    /// RFC 3161 timestamp receipts (Phase 6).
+    /// NOT part of claim_core_digest - append-only.
+    /// </summary>
+    [JsonPropertyOrder(6)]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<TimestampReceiptInfo>? TimestampReceipts { get; init; }
 }
 
 /// <summary>
@@ -190,4 +198,106 @@ public sealed class AttestorInfo
     [JsonPropertyOrder(2)]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? DisplayName { get; init; }
+}
+
+/// <summary>
+/// RFC 3161 timestamp receipt information in the bundle.
+/// Contract: TimestampReceiptRFC3161.v1
+/// </summary>
+public sealed class TimestampReceiptInfo
+{
+    /// <summary>
+    /// Contract version.
+    /// </summary>
+    [JsonPropertyOrder(0)]
+    public string Contract { get; init; } = "TimestampReceiptRFC3161.v1";
+
+    /// <summary>
+    /// Unique identifier for this receipt.
+    /// </summary>
+    [JsonPropertyOrder(1)]
+    public required string ReceiptId { get; init; }
+
+    /// <summary>
+    /// Subject information - what was timestamped.
+    /// </summary>
+    [JsonPropertyOrder(2)]
+    public required TimestampSubjectInfo Subject { get; init; }
+
+    /// <summary>
+    /// Hash algorithm used (always SHA-256 for v1).
+    /// </summary>
+    [JsonPropertyOrder(3)]
+    public string HashAlgorithm { get; init; } = "SHA-256";
+
+    /// <summary>
+    /// The message imprint (hex).
+    /// For ClaimLedger: SHA256(claim_core_digest_bytes).
+    /// </summary>
+    [JsonPropertyOrder(4)]
+    public required string MessageImprintHex { get; init; }
+
+    /// <summary>
+    /// The raw TSA token (DER-encoded, base64).
+    /// </summary>
+    [JsonPropertyOrder(5)]
+    public required string TsaTokenDerBase64 { get; init; }
+
+    /// <summary>
+    /// Timestamp from the TSA (genTime).
+    /// Stored redundantly for display.
+    /// </summary>
+    [JsonPropertyOrder(6)]
+    public required string IssuedAt { get; init; }
+
+    /// <summary>
+    /// TSA metadata.
+    /// </summary>
+    [JsonPropertyOrder(7)]
+    public required TimestampTsaInfo Tsa { get; init; }
+}
+
+/// <summary>
+/// What was timestamped.
+/// </summary>
+public sealed class TimestampSubjectInfo
+{
+    /// <summary>
+    /// The kind of subject (always "CLAIM_CORE_DIGEST" for claims).
+    /// </summary>
+    [JsonPropertyOrder(0)]
+    public string Kind { get; init; } = "CLAIM_CORE_DIGEST";
+
+    /// <summary>
+    /// The claim_core_digest (hex).
+    /// </summary>
+    [JsonPropertyOrder(1)]
+    public required string DigestHex { get; init; }
+}
+
+/// <summary>
+/// TSA metadata in the receipt.
+/// </summary>
+public sealed class TimestampTsaInfo
+{
+    /// <summary>
+    /// TSA policy OID.
+    /// </summary>
+    [JsonPropertyOrder(0)]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? PolicyOid { get; init; }
+
+    /// <summary>
+    /// Token serial number (hex).
+    /// </summary>
+    [JsonPropertyOrder(1)]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SerialNumberHex { get; init; }
+
+    /// <summary>
+    /// SHA-256 fingerprint of signer certificate (hex).
+    /// </summary>
+    [JsonPropertyOrder(2)]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? CertFingerprintSha256Hex { get; init; }
 }
