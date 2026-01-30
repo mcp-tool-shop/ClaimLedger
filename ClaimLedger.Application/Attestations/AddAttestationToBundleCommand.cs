@@ -53,6 +53,7 @@ public static class AddAttestationToBundleHandler
             Algorithms = bundle.Algorithms,
             Claim = bundle.Claim,
             Researcher = bundle.Researcher,
+            Citations = bundle.Citations,
             Attestations = newAttestations
         };
     }

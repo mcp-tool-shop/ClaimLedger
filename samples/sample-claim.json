@@ -6,7 +6,7 @@
     "Encoding": "UTF-8"
   },
   "Claim": {
-    "ClaimId": "6f291cc9-d773-4c5a-99fd-d4c78cfa7c71",
+    "ClaimId": "fc23ad53-74b5-4a4d-b3bf-f0b5deddf5b5",
     "Statement": "The proposed neural network architecture achieves 94.7% accuracy on the MNIST benchmark",
     "AssertedAtUtc": "2024-06-15T12:00:00.0000000\u002B00:00",
     "Evidence": [
@@ -21,11 +21,11 @@
         "Locator": "https://github.com/example/model"
       }
     ],
-    "Signature": "IOQoCJQOwGxY2qRRinz/ZqT\u002BwLXx/jrL5xLsonb0DTORZ/wo9Sg0Z3mlSzaiSvFzS6p/Q6EDHel5wZRW6sJTDQ=="
+    "Signature": "nAvy7vIYGkI6V8waHeYv3lGy\u002BkfV1nUP2dWwD\u002BIKNeRdPEhbfq8HvD8GgNO0XKqqYq3DjQ58urJAog/fWPPoBA=="
   },
   "Researcher": {
-    "ResearcherId": "f8e5f44a-10db-47d7-a900-3f0ee537315d",
-    "PublicKey": "ed25519:Gqg9Dw3\u002Bl9W67cXGwKGg2d1kNZq1Ul7xIqjiZxe3ndg=",
+    "ResearcherId": "773a22bb-b8f5-4568-b21f-fc6feb9889cf",
+    "PublicKey": "ed25519:y0RLetxnyUwRHhGa0CoAcfxdAvJnUjce9J3p3koUY4A=",
     "DisplayName": "Dr. Jane Smith"
   }
 }

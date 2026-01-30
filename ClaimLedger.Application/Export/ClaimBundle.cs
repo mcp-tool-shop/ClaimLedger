@@ -21,10 +21,20 @@ public sealed class ClaimBundle
     public required ResearcherInfo Researcher { get; init; }
 
     /// <summary>
-    /// Attestations about this claim (Phase 2).
-    /// Can be absent or empty for Phase 1 bundles.
+    /// Citations to other claims (Phase 3).
+    /// Part of claim_core_digest - cannot be modified after signing.
+    /// Can be absent or empty for Phase 1/2 bundles.
     /// </summary>
     [JsonPropertyOrder(4)]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<CitationInfo>? Citations { get; init; }
+
+    /// <summary>
+    /// Attestations about this claim (Phase 2).
+    /// Can be absent or empty for Phase 1 bundles.
+    /// NOT part of claim_core_digest - append-only.
+    /// </summary>
+    [JsonPropertyOrder(5)]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<AttestationInfo>? Attestations { get; init; }
 }
@@ -95,6 +105,44 @@ public sealed class ResearcherInfo
     [JsonPropertyOrder(2)]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? DisplayName { get; init; }
+}
+
+/// <summary>
+/// Citation information in the bundle.
+/// Citations are part of claim_core_digest and cannot be modified after signing.
+/// </summary>
+public sealed class CitationInfo
+{
+    [JsonPropertyOrder(0)]
+    public required string CitationId { get; init; }
+
+    [JsonPropertyOrder(1)]
+    public required string CitedClaimCoreDigest { get; init; }
+
+    [JsonPropertyOrder(2)]
+    public required string Relation { get; init; }
+
+    [JsonPropertyOrder(3)]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Locator { get; init; }
+
+    [JsonPropertyOrder(4)]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Notes { get; init; }
+
+    [JsonPropertyOrder(5)]
+    public required string IssuedAtUtc { get; init; }
+
+    [JsonPropertyOrder(6)]
+    public required string Signature { get; init; }
+
+    /// <summary>
+    /// Optional embedded cited claim bundle for offline verification.
+    /// Not part of the citation signature - purely for convenience.
+    /// </summary>
+    [JsonPropertyOrder(7)]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ClaimBundle? Embedded { get; init; }
 }
 
 /// <summary>
