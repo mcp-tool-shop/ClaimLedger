@@ -164,12 +164,16 @@ public sealed class CliVerificationResult
     public static CliVerificationResult Error(string message)
         => new(VerificationStatus.Error, message, null, null);
 
+    public static CliVerificationResult Revoked(ClaimBundle bundle, string reason, IReadOnlyList<string>? warnings = null)
+        => new(VerificationStatus.Revoked, reason, bundle, warnings);
+
     public int ExitCode => Status switch
     {
         VerificationStatus.Valid => 0,
         VerificationStatus.Broken => 3,
         VerificationStatus.InvalidInput => 4,
         VerificationStatus.Error => 5,
+        VerificationStatus.Revoked => 6,
         _ => 5
     };
 }
@@ -179,8 +183,14 @@ public sealed class CliVerificationResult
 /// </summary>
 public enum VerificationStatus
 {
+    /// <summary>Valid - signature verified, no issues.</summary>
     Valid = 0,
+    /// <summary>Broken - tampered content or invalid signature.</summary>
     Broken = 3,
+    /// <summary>Invalid input - malformed bundle or unsupported format.</summary>
     InvalidInput = 4,
-    Error = 5
+    /// <summary>Error - tool/runtime error.</summary>
+    Error = 5,
+    /// <summary>Revoked - cryptographically valid but signer key is revoked.</summary>
+    Revoked = 6
 }

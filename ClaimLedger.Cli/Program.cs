@@ -3,9 +3,12 @@ using System.Text.Json;
 using ClaimLedger.Application.Attestations;
 using ClaimLedger.Application.Citations;
 using ClaimLedger.Application.Export;
+using ClaimLedger.Application.Revocations;
 using ClaimLedger.Cli.Verification;
 using ClaimLedger.Domain.Attestations;
 using ClaimLedger.Domain.Citations;
+using ClaimLedger.Domain.Primitives;
+using ClaimLedger.Domain.Revocations;
 using Shared.Crypto;
 
 namespace ClaimLedger.Cli;
@@ -27,6 +30,8 @@ public static class Program
         rootCommand.AddCommand(CreateAttestationsCommand());
         rootCommand.AddCommand(CreateCiteCommand());
         rootCommand.AddCommand(CreateCitationsCommand());
+        rootCommand.AddCommand(CreateRevokeKeyCommand());
+        rootCommand.AddCommand(CreateRevocationsCommand());
 
         return await rootCommand.InvokeAsync(args);
     }
@@ -57,6 +62,14 @@ public static class Program
             "--claim-dir",
             "Directory containing claim bundles for citation resolution");
 
+        var revocationsDirOption = new Option<DirectoryInfo?>(
+            "--revocations-dir",
+            "Directory containing revocation bundles to check against");
+
+        var strictRevocationsOption = new Option<bool>(
+            "--strict-revocations",
+            "Fail if any signer key is revoked");
+
         var command = new Command("verify", "Verify a claim bundle's cryptographic validity")
         {
             bundleArg,
@@ -64,15 +77,26 @@ public static class Program
             attestationsOption,
             citationsOption,
             strictCitationsOption,
-            claimDirOption
+            claimDirOption,
+            revocationsDirOption,
+            strictRevocationsOption
         };
 
-        command.SetHandler(async (FileInfo bundle, DirectoryInfo? evidenceDir, bool verifyAttestations,
-            bool verifyCitations, bool strictCitations, DirectoryInfo? claimDir) =>
+        command.SetHandler(async context =>
         {
-            var exitCode = await VerifyBundle(bundle, evidenceDir, verifyAttestations, verifyCitations, strictCitations, claimDir);
-            Environment.ExitCode = exitCode;
-        }, bundleArg, evidenceOption, attestationsOption, citationsOption, strictCitationsOption, claimDirOption);
+            var bundle = context.ParseResult.GetValueForArgument(bundleArg);
+            var evidenceDir = context.ParseResult.GetValueForOption(evidenceOption);
+            var verifyAttestations = context.ParseResult.GetValueForOption(attestationsOption);
+            var verifyCitations = context.ParseResult.GetValueForOption(citationsOption);
+            var strictCitations = context.ParseResult.GetValueForOption(strictCitationsOption);
+            var claimDir = context.ParseResult.GetValueForOption(claimDirOption);
+            var revocationsDir = context.ParseResult.GetValueForOption(revocationsDirOption);
+            var strictRevocations = context.ParseResult.GetValueForOption(strictRevocationsOption);
+
+            var exitCode = await VerifyBundle(bundle, evidenceDir, verifyAttestations, verifyCitations,
+                strictCitations, claimDir, revocationsDir, strictRevocations);
+            context.ExitCode = exitCode;
+        });
 
         return command;
     }
@@ -168,7 +192,9 @@ public static class Program
         bool verifyAttestations,
         bool verifyCitations = false,
         bool strictCitations = false,
-        DirectoryInfo? claimDir = null)
+        DirectoryInfo? claimDir = null,
+        DirectoryInfo? revocationsDir = null,
+        bool strictRevocations = false)
     {
         if (!bundleFile.Exists)
         {
@@ -212,6 +238,13 @@ public static class Program
         if (claimDir != null && claimDir.Exists)
         {
             resolvedBundles = await LoadClaimBundlesFromDirectory(claimDir);
+        }
+
+        // Load revocations if provided
+        RevocationRegistry? revocationRegistry = null;
+        if (revocationsDir != null && revocationsDir.Exists)
+        {
+            revocationRegistry = await LoadRevocationsFromDirectory(revocationsDir);
         }
 
         var result = BundleVerifier.Verify(bundleJson, evidenceFiles);
@@ -296,6 +329,42 @@ public static class Program
                 Console.WriteLine("  Attestations: none");
             }
 
+            // Verify against revocations if provided
+            if (revocationRegistry != null)
+            {
+                var revocationResult = VerifyAgainstRevocationsHandler.Handle(
+                    new VerifyAgainstRevocationsQuery(bundle, revocationRegistry, strictRevocations));
+
+                var revokedCount = revocationResult.Checks.Count(c => c.IsRevoked);
+                if (revokedCount > 0 || revocationsDir != null)
+                {
+                    Console.WriteLine();
+                    Console.WriteLine($"  Revocations: {revocationRegistry.GetAll().Count} loaded");
+
+                    foreach (var check in revocationResult.Checks.Where(c => c.IsRevoked))
+                    {
+                        Console.WriteLine($"    \u2718 {check.SignatureType} signer revoked at {check.RevokedAtUtc} ({check.RevocationReason})");
+                    }
+
+                    if (revokedCount == 0)
+                    {
+                        Console.WriteLine($"    \u2714 No signer keys revoked");
+                    }
+                }
+
+                foreach (var warning in revocationResult.Warnings)
+                {
+                    Console.WriteLine($"  \u26A0 {warning}");
+                }
+
+                if (!revocationResult.IsValid)
+                {
+                    Console.WriteLine();
+                    Console.WriteLine("  \u2718 One or more signer keys are revoked");
+                    return 6; // REVOKED - cryptographically valid but signer key revoked
+                }
+            }
+
             foreach (var warning in result.Warnings)
             {
                 Console.WriteLine($"  \u26A0 {warning}");
@@ -340,6 +409,34 @@ public static class Program
         }
 
         return result;
+    }
+
+    private static async Task<RevocationRegistry> LoadRevocationsFromDirectory(DirectoryInfo dir)
+    {
+        var registry = new RevocationRegistry();
+
+        foreach (var file in dir.GetFiles("*.json", SearchOption.AllDirectories))
+        {
+            try
+            {
+                var json = await File.ReadAllTextAsync(file.FullName);
+                var bundle = JsonSerializer.Deserialize<RevocationBundle>(json);
+                if (bundle?.Revocation != null)
+                {
+                    var revocation = RevocationRegistry.LoadFromBundle(bundle);
+                    if (revocation != null)
+                    {
+                        registry.Add(revocation);
+                    }
+                }
+            }
+            catch
+            {
+                // Skip files that aren't valid revocation bundles
+            }
+        }
+
+        return registry;
     }
 
     private static async Task<int> InspectBundle(FileInfo bundleFile)
@@ -932,6 +1029,272 @@ public static class Program
             {
                 Console.WriteLine($"    Expires:   {attestation.ExpiresAtUtc}");
             }
+            Console.WriteLine();
+        }
+
+        return 0;
+    }
+
+    private static Command CreateRevokeKeyCommand()
+    {
+        var keyFileArg = new Argument<FileInfo>("key-file", "Path to key file to revoke");
+
+        var reasonOption = new Option<string>(
+            "--reason",
+            "Revocation reason: COMPROMISED, ROTATED, RETIRED, OTHER")
+        { IsRequired = true };
+        reasonOption.AddAlias("-r");
+
+        var successorKeyOption = new Option<FileInfo?>(
+            "--successor-key",
+            "Path to successor key file (for rotation)");
+        successorKeyOption.AddAlias("-s");
+
+        var revokedAtOption = new Option<string?>(
+            "--revoked-at",
+            "Revocation time (ISO-8601, default: now)");
+
+        var notesOption = new Option<string?>(
+            "--notes",
+            "Optional notes about this revocation");
+        notesOption.AddAlias("-n");
+
+        var outputOption = new Option<FileInfo?>(
+            "--out",
+            "Output path for revocation bundle (default: <key-file>.revoked.json)");
+        outputOption.AddAlias("-o");
+
+        var successorSignedOption = new Option<bool>(
+            "--successor-signed",
+            "Sign with successor key instead of revoked key (requires --successor-key)");
+
+        var command = new Command("revoke-key", "Create a key revocation")
+        {
+            keyFileArg,
+            reasonOption,
+            successorKeyOption,
+            revokedAtOption,
+            notesOption,
+            outputOption,
+            successorSignedOption
+        };
+
+        command.SetHandler(async context =>
+        {
+            var keyFile = context.ParseResult.GetValueForArgument(keyFileArg);
+            var reason = context.ParseResult.GetValueForOption(reasonOption)!;
+            var successorKey = context.ParseResult.GetValueForOption(successorKeyOption);
+            var revokedAtStr = context.ParseResult.GetValueForOption(revokedAtOption);
+            var notes = context.ParseResult.GetValueForOption(notesOption);
+            var output = context.ParseResult.GetValueForOption(outputOption);
+            var successorSigned = context.ParseResult.GetValueForOption(successorSignedOption);
+
+            var exitCode = await CreateRevocation(keyFile, reason, successorKey, revokedAtStr, notes, output, successorSigned);
+            context.ExitCode = exitCode;
+        });
+
+        return command;
+    }
+
+    private static Command CreateRevocationsCommand()
+    {
+        var dirArg = new Argument<DirectoryInfo>("directory", "Directory containing revocation bundles");
+
+        var command = new Command("revocations", "List revocations in a directory")
+        {
+            dirArg
+        };
+
+        command.SetHandler(async (DirectoryInfo dir) =>
+        {
+            var exitCode = await ListRevocations(dir);
+            Environment.ExitCode = exitCode;
+        }, dirArg);
+
+        return command;
+    }
+
+    private static async Task<int> CreateRevocation(
+        FileInfo keyFile,
+        string reason,
+        FileInfo? successorKeyFile,
+        string? revokedAtStr,
+        string? notes,
+        FileInfo? outputFile,
+        bool successorSigned)
+    {
+        // Validate reason
+        if (!RevocationReason.IsValid(reason))
+        {
+            Console.WriteLine($"Error: Invalid revocation reason: {reason}");
+            Console.WriteLine($"Valid reasons: {string.Join(", ", RevocationReason.All)}");
+            return 4;
+        }
+
+        // Successor-signed requires successor key
+        if (successorSigned && successorKeyFile == null)
+        {
+            Console.WriteLine("Error: --successor-signed requires --successor-key");
+            return 4;
+        }
+
+        // Read key to revoke
+        if (!keyFile.Exists)
+        {
+            Console.WriteLine($"Error: Key file not found: {keyFile.FullName}");
+            return 4;
+        }
+
+        AttestorKeyFile revokedKey;
+        try
+        {
+            var keyJson = await File.ReadAllTextAsync(keyFile.FullName);
+            revokedKey = JsonSerializer.Deserialize<AttestorKeyFile>(keyJson)
+                ?? throw new JsonException("Key file is null");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error reading key file: {ex.Message}");
+            return 5;
+        }
+
+        // Read successor key if provided
+        AttestorKeyFile? successorKey = null;
+        if (successorKeyFile != null)
+        {
+            if (!successorKeyFile.Exists)
+            {
+                Console.WriteLine($"Error: Successor key file not found: {successorKeyFile.FullName}");
+                return 4;
+            }
+
+            try
+            {
+                var successorJson = await File.ReadAllTextAsync(successorKeyFile.FullName);
+                successorKey = JsonSerializer.Deserialize<AttestorKeyFile>(successorJson)
+                    ?? throw new JsonException("Successor key file is null");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error reading successor key file: {ex.Message}");
+                return 5;
+            }
+        }
+
+        // Parse revoked-at if provided
+        DateTimeOffset revokedAt = DateTimeOffset.UtcNow;
+        if (!string.IsNullOrEmpty(revokedAtStr))
+        {
+            if (!DateTimeOffset.TryParse(revokedAtStr, out revokedAt))
+            {
+                Console.WriteLine($"Error: Invalid revoked-at date: {revokedAtStr}");
+                return 4;
+            }
+        }
+
+        // Parse keys
+        var researcherId = ResearcherId.Parse(revokedKey.ResearcherId);
+        var revokedPublicKey = Ed25519PublicKey.Parse(revokedKey.PublicKey);
+        var revokedPrivateKeyBytes = Convert.FromBase64String(revokedKey.PrivateKey);
+        var revokedPrivateKey = Ed25519PrivateKey.FromBytes(revokedPrivateKeyBytes);
+
+        Ed25519PublicKey? successorPublicKey = null;
+        Ed25519PrivateKey? successorPrivateKey = null;
+        if (successorKey != null)
+        {
+            successorPublicKey = Ed25519PublicKey.Parse(successorKey.PublicKey);
+            var successorPrivateKeyBytes = Convert.FromBase64String(successorKey.PrivateKey);
+            successorPrivateKey = Ed25519PrivateKey.FromBytes(successorPrivateKeyBytes);
+        }
+
+        // Create revocation
+        Domain.Revocations.Revocation revocation;
+        if (successorSigned && successorPublicKey != null && successorPrivateKey != null)
+        {
+            revocation = Domain.Revocations.Revocation.CreateSuccessorSigned(
+                researcherId,
+                revokedPublicKey,
+                successorPublicKey,
+                successorPrivateKey,
+                revokedAt,
+                reason,
+                notes);
+        }
+        else
+        {
+            revocation = Domain.Revocations.Revocation.CreateSelfSigned(
+                researcherId,
+                revokedPublicKey,
+                revokedPrivateKey,
+                revokedAt,
+                reason,
+                successorPublicKey,
+                notes);
+        }
+
+        // Export to bundle
+        var bundle = ExportRevocationBundleHandler.Handle(revocation, revokedKey.DisplayName);
+
+        // Determine output path
+        var outputPath = outputFile?.FullName
+            ?? Path.Combine(
+                Path.GetDirectoryName(keyFile.FullName) ?? ".",
+                Path.GetFileNameWithoutExtension(keyFile.Name) + ".revoked.json");
+
+        // Write output
+        try
+        {
+            var outputJson = JsonSerializer.Serialize(bundle, JsonOptions);
+            await File.WriteAllTextAsync(outputPath, outputJson);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error writing output: {ex.Message}");
+            return 5;
+        }
+
+        Console.WriteLine($"\u2714 Key revoked");
+        Console.WriteLine($"  ID:         {revocation.Id}");
+        Console.WriteLine($"  Reason:     {reason}");
+        Console.WriteLine($"  Revoked At: {revokedAt:O}");
+        Console.WriteLine($"  Issuer:     {revocation.IssuerMode}");
+        if (successorPublicKey != null)
+            Console.WriteLine($"  Successor:  {Truncate(successorPublicKey.ToString(), 16)}...");
+        Console.WriteLine($"  Output:     {outputPath}");
+
+        return 0;
+    }
+
+    private static async Task<int> ListRevocations(DirectoryInfo dir)
+    {
+        if (!dir.Exists)
+        {
+            Console.WriteLine($"Error: Directory not found: {dir.FullName}");
+            return 4;
+        }
+
+        var registry = await LoadRevocationsFromDirectory(dir);
+        var revocations = registry.GetAll();
+
+        if (revocations.Count == 0)
+        {
+            Console.WriteLine("No revocations found");
+            return 0;
+        }
+
+        Console.WriteLine($"Revocations: {revocations.Count}");
+        Console.WriteLine();
+
+        foreach (var revocation in revocations.OrderBy(r => r.RevokedAtUtc))
+        {
+            Console.WriteLine($"  [{revocation.Reason}] {Truncate(revocation.Id.ToString(), 8)}...");
+            Console.WriteLine($"    Key:        {Truncate(revocation.RevokedPublicKey.ToString(), 16)}...");
+            Console.WriteLine($"    Revoked At: {revocation.RevokedAtUtc:O}");
+            Console.WriteLine($"    Issuer:     {revocation.IssuerMode}");
+            if (revocation.SuccessorPublicKey != null)
+                Console.WriteLine($"    Successor:  {Truncate(revocation.SuccessorPublicKey.ToString(), 16)}...");
+            if (!string.IsNullOrEmpty(revocation.Notes))
+                Console.WriteLine($"    Notes:      {Truncate(revocation.Notes, 50)}");
             Console.WriteLine();
         }
 
