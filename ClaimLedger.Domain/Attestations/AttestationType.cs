@@ -26,12 +26,19 @@ public static class AttestationType
     /// </summary>
     public const string DataAvailabilityConfirmed = "DATA_AVAILABILITY_CONFIRMED";
 
+    /// <summary>
+    /// Witness timestamp: attestor witnessed claim existence at issued_at time.
+    /// Proves a specific key signed at time T, binding to claim_core_digest.
+    /// </summary>
+    public const string WitnessedAt = "WITNESSED_AT";
+
     private static readonly HashSet<string> ValidTypes = new(StringComparer.Ordinal)
     {
         Reviewed,
         Reproduced,
         InstitutionApproved,
-        DataAvailabilityConfirmed
+        DataAvailabilityConfirmed,
+        WitnessedAt
     };
 
     public static bool IsValid(string type) => ValidTypes.Contains(type);

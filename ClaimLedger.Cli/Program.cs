@@ -32,6 +32,7 @@ public static class Program
         rootCommand.AddCommand(CreateCitationsCommand());
         rootCommand.AddCommand(CreateRevokeKeyCommand());
         rootCommand.AddCommand(CreateRevocationsCommand());
+        rootCommand.AddCommand(CreateWitnessCommand());
 
         return await rootCommand.InvokeAsync(args);
     }
@@ -1297,6 +1298,216 @@ public static class Program
                 Console.WriteLine($"    Notes:      {Truncate(revocation.Notes, 50)}");
             Console.WriteLine();
         }
+
+        return 0;
+    }
+
+    private static Command CreateWitnessCommand()
+    {
+        var bundleArg = new Argument<FileInfo>("bundle", "Path to claim bundle JSON file");
+
+        var witnessKeyOption = new Option<FileInfo>(
+            "--witness-key",
+            "Path to witness private key JSON file")
+        { IsRequired = true };
+        witnessKeyOption.AddAlias("-k");
+
+        var issuedAtOption = new Option<string?>(
+            "--issued-at",
+            "Witness timestamp (ISO-8601 UTC, default: now)");
+        issuedAtOption.AddAlias("-t");
+
+        var statementOption = new Option<string?>(
+            "--statement",
+            "Optional statement (default: 'Witnessed claim existence')");
+        statementOption.AddAlias("-s");
+
+        var outputOption = new Option<FileInfo?>(
+            "--out",
+            "Output path for witnessed bundle (default: <input>.witnessed.json)");
+        outputOption.AddAlias("-o");
+
+        var command = new Command("witness", "Create a witness timestamp attestation for a claim")
+        {
+            bundleArg,
+            witnessKeyOption,
+            issuedAtOption,
+            statementOption,
+            outputOption
+        };
+
+        command.SetHandler(async context =>
+        {
+            var bundle = context.ParseResult.GetValueForArgument(bundleArg);
+            var witnessKey = context.ParseResult.GetValueForOption(witnessKeyOption)!;
+            var issuedAtStr = context.ParseResult.GetValueForOption(issuedAtOption);
+            var statement = context.ParseResult.GetValueForOption(statementOption);
+            var output = context.ParseResult.GetValueForOption(outputOption);
+
+            var exitCode = await CreateWitnessAttestation(bundle, witnessKey, issuedAtStr, statement, output);
+            context.ExitCode = exitCode;
+        });
+
+        return command;
+    }
+
+    private static async Task<int> CreateWitnessAttestation(
+        FileInfo bundleFile,
+        FileInfo witnessKeyFile,
+        string? issuedAtStr,
+        string? statement,
+        FileInfo? outputFile)
+    {
+        // Read bundle
+        if (!bundleFile.Exists)
+        {
+            Console.WriteLine($"Error: Bundle file not found: {bundleFile.FullName}");
+            return 4;
+        }
+
+        ClaimBundle bundle;
+        try
+        {
+            var bundleJson = await File.ReadAllTextAsync(bundleFile.FullName);
+            bundle = JsonSerializer.Deserialize<ClaimBundle>(bundleJson)
+                ?? throw new JsonException("Bundle is null");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error reading bundle: {ex.Message}");
+            return 5;
+        }
+
+        // Read witness key
+        if (!witnessKeyFile.Exists)
+        {
+            Console.WriteLine($"Error: Witness key file not found: {witnessKeyFile.FullName}");
+            return 4;
+        }
+
+        AttestorKeyFile witnessKey;
+        try
+        {
+            var keyJson = await File.ReadAllTextAsync(witnessKeyFile.FullName);
+            witnessKey = JsonSerializer.Deserialize<AttestorKeyFile>(keyJson)
+                ?? throw new JsonException("Key file is null");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error reading witness key: {ex.Message}");
+            return 5;
+        }
+
+        // Parse issued-at if provided, default to now
+        DateTimeOffset issuedAt = DateTimeOffset.UtcNow;
+        if (!string.IsNullOrEmpty(issuedAtStr))
+        {
+            if (!DateTimeOffset.TryParse(issuedAtStr, out issuedAt))
+            {
+                Console.WriteLine($"Error: Invalid issued-at date: {issuedAtStr}");
+                return 4;
+            }
+        }
+
+        // Default statement
+        var attestationStatement = statement ?? "Witnessed claim existence";
+
+        // Compute claim_core_digest
+        var claimCoreDigest = ClaimCoreDigest.Compute(bundle);
+
+        // Parse keys
+        Ed25519PublicKey publicKey;
+        Ed25519PrivateKey privateKey;
+        try
+        {
+            publicKey = Ed25519PublicKey.Parse(witnessKey.PublicKey);
+            var privateKeyBytes = Convert.FromBase64String(witnessKey.PrivateKey);
+            privateKey = Ed25519PrivateKey.FromBytes(privateKeyBytes);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error parsing witness keys: {ex.Message}");
+            return 5;
+        }
+
+        // Build and sign witness attestation
+        var attestationId = Domain.Primitives.AttestationId.New();
+
+        var signable = new AttestationSignable
+        {
+            Contract = "AttestationSignable.v1",
+            AttestationId = attestationId.ToString(),
+            ClaimCoreDigest = claimCoreDigest.ToString(),
+            Attestor = new AttestorIdentity
+            {
+                ResearcherId = witnessKey.ResearcherId,
+                PublicKey = witnessKey.PublicKey,
+                DisplayName = witnessKey.DisplayName
+            },
+            AttestationType = AttestationType.WitnessedAt,
+            Statement = attestationStatement,
+            IssuedAtUtc = issuedAt.ToString("O"),
+            ExpiresAtUtc = null,
+            Policy = null
+        };
+
+        var bytes = CanonicalJson.SerializeToBytes(signable);
+        var signature = privateKey.Sign(bytes);
+
+        // Create attestation info
+        var attestationInfo = new AttestationInfo
+        {
+            AttestationId = attestationId.ToString(),
+            ClaimCoreDigest = claimCoreDigest.ToString(),
+            Attestor = new AttestorInfo
+            {
+                ResearcherId = witnessKey.ResearcherId,
+                PublicKey = witnessKey.PublicKey,
+                DisplayName = witnessKey.DisplayName
+            },
+            AttestationType = AttestationType.WitnessedAt,
+            Statement = attestationStatement,
+            IssuedAtUtc = issuedAt.ToString("O"),
+            ExpiresAtUtc = null,
+            Signature = signature.ToString()
+        };
+
+        // Add to bundle (append-only)
+        var existingAttestations = bundle.Attestations ?? Array.Empty<AttestationInfo>();
+        var newBundle = new ClaimBundle
+        {
+            Version = bundle.Version,
+            Algorithms = bundle.Algorithms,
+            Claim = bundle.Claim,
+            Researcher = bundle.Researcher,
+            Citations = bundle.Citations,
+            Attestations = existingAttestations.Append(attestationInfo).ToList()
+        };
+
+        // Determine output path
+        var outputPath = outputFile?.FullName
+            ?? Path.Combine(
+                Path.GetDirectoryName(bundleFile.FullName) ?? ".",
+                Path.GetFileNameWithoutExtension(bundleFile.Name) + ".witnessed.json");
+
+        // Write output
+        try
+        {
+            var outputJson = JsonSerializer.Serialize(newBundle, JsonOptions);
+            await File.WriteAllTextAsync(outputPath, outputJson);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error writing output: {ex.Message}");
+            return 5;
+        }
+
+        Console.WriteLine($"\u2714 Witness timestamp created");
+        Console.WriteLine($"  ID:          {attestationId}");
+        Console.WriteLine($"  Witnessed:   {issuedAt:O}");
+        Console.WriteLine($"  Digest:      {Truncate(claimCoreDigest.ToString(), 16)}...");
+        Console.WriteLine($"  Witness:     {witnessKey.DisplayName ?? "Anonymous"} ({Truncate(witnessKey.PublicKey, 12)}...)");
+        Console.WriteLine($"  Output:      {outputPath}");
 
         return 0;
     }

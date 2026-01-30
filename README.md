@@ -55,8 +55,8 @@ ClaimLedger.sln
 ├── ClaimLedger.Domain     ← Claims, Evidence, Citations, Attestations, Revocations
 ├── ClaimLedger.Application← Commands, verification, bundle export
 ├── ClaimLedger.Infrastructure ← (empty)
-├── ClaimLedger.Cli        ← verify / inspect / attest / cite / revoke commands
-└── ClaimLedger.Tests      ← 121 tests
+├── ClaimLedger.Cli        ← verify / inspect / attest / cite / revoke / witness commands
+└── ClaimLedger.Tests      ← 137 tests
 ```
 
 ## Claim Bundle Format
@@ -137,7 +137,7 @@ claimledger attest claim.json \
 claimledger attestations claim.attested.json
 ```
 
-Attestation types: `REVIEWED`, `REPRODUCED`, `INSTITUTION_APPROVED`, `DATA_AVAILABILITY_CONFIRMED`
+Attestation types: `REVIEWED`, `REPRODUCED`, `INSTITUTION_APPROVED`, `DATA_AVAILABILITY_CONFIRMED`, `WITNESSED_AT`
 
 ## Citations
 
@@ -183,6 +183,27 @@ claimledger revocations ./revocations/
 Revocation reasons: `COMPROMISED`, `ROTATED`, `RETIRED`, `OTHER`
 
 See [docs/revocations.md](docs/revocations.md) for detailed revocation semantics.
+
+## Witness Timestamping
+
+Create cryptographic proof that a claim existed at a specific time:
+
+```bash
+# Create a witness timestamp
+claimledger witness claim.json \
+  --witness-key witness-service.key.json \
+  --out claim.witnessed.json
+
+# Witness with explicit timestamp
+claimledger witness claim.json \
+  --witness-key witness-service.key.json \
+  --issued-at "2024-06-15T12:00:00Z" \
+  --out claim.witnessed.json
+```
+
+Witness timestamps are `WITNESSED_AT` attestations that bind to the claim's `claim_core_digest`.
+
+See [docs/timestamping.md](docs/timestamping.md) for detailed timestamping semantics.
 
 ## What This Is Not
 
