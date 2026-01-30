@@ -97,6 +97,54 @@ public sealed class EvidenceInfo
     [JsonPropertyOrder(2)]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Locator { get; init; }
+
+    /// <summary>
+    /// Evidence kind for extended verification.
+    /// "FILE" (default) = raw file hash
+    /// "CREATORLEDGER_BUNDLE" = hash of a CreatorLedger proof bundle
+    /// Absence means FILE for backward compatibility.
+    /// </summary>
+    [JsonPropertyOrder(3)]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Kind { get; init; }
+
+    /// <summary>
+    /// For CREATORLEDGER_BUNDLE: path to embedded bundle in pack (e.g., "creatorledger/abc123.json").
+    /// </summary>
+    [JsonPropertyOrder(4)]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? EmbeddedPath { get; init; }
+
+    /// <summary>
+    /// For CREATORLEDGER_BUNDLE: the asset ID within the bundle.
+    /// </summary>
+    [JsonPropertyOrder(5)]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? BundleAssetId { get; init; }
+}
+
+/// <summary>
+/// Evidence kind constants.
+/// </summary>
+public static class EvidenceKind
+{
+    /// <summary>
+    /// Raw file evidence (default).
+    /// </summary>
+    public const string File = "FILE";
+
+    /// <summary>
+    /// CreatorLedger proof bundle.
+    /// </summary>
+    public const string CreatorLedgerBundle = "CREATORLEDGER_BUNDLE";
+
+    /// <summary>
+    /// Gets the effective kind (defaults to FILE if null).
+    /// </summary>
+    public static string GetEffectiveKind(string? kind) => kind ?? File;
+
+    public static bool IsValid(string kind) =>
+        kind == File || kind == CreatorLedgerBundle;
 }
 
 /// <summary>
