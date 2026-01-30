@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <NoWarn>CA1707;CA1826;CA1869</NoWarn>
+
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.0" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
+    <PackageReference Include="xunit" Version="2.5.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ClaimLedger.Domain\ClaimLedger.Domain.csproj" />
+    <ProjectReference Include="..\ClaimLedger.Application\ClaimLedger.Application.csproj" />
+    <ProjectReference Include="..\ClaimLedger.Cli\ClaimLedger.Cli.csproj" />
+    <ProjectReference Include="..\..\CreatorLedger\Shared.Crypto\Shared.Crypto.csproj" />
+  </ItemGroup>
+
+</Project>
