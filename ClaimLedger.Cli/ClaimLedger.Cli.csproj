@@ -6,6 +6,14 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AssemblyName>claimledger</AssemblyName>
+
+    <!-- Package metadata -->
+    <Description>ClaimLedger CLI - Verify, inspect, attest, cite, revoke, witness, and timestamp scientific claims with cryptographic provenance.</Description>
+    <Authors>mcp-tool-shop</Authors>
+    <Company>MCP Tool Shop</Company>
+    <Copyright>Copyright (c) 2025-2026 MCP Tool Shop</Copyright>
+    <PackageProjectUrl>https://github.com/mcp-tool-shop-org/ClaimLedger</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/mcp-tool-shop-org/ClaimLedger</RepositoryUrl>
   </PropertyGroup>
 
   <ItemGroup>

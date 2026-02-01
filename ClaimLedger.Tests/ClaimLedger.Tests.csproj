@@ -8,6 +8,10 @@
 
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+
+    <!-- Package metadata -->
+    <Description>Unit and integration tests for ClaimLedger - scientific claim verification, citation, and timestamping tests.</Description>
+    <Authors>mcp-tool-shop</Authors>
   </PropertyGroup>
 
   <ItemGroup>

@@ -10,6 +10,15 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+
+    <!-- Package metadata -->
+    <Description>Infrastructure implementations for ClaimLedger - SQLite persistence, schema migrations, and cryptographic verification.</Description>
+    <Authors>mcp-tool-shop</Authors>
+    <Company>MCP Tool Shop</Company>
+    <Copyright>Copyright (c) 2025-2026 MCP Tool Shop</Copyright>
+    <PackageProjectUrl>https://github.com/mcp-tool-shop-org/ClaimLedger</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/mcp-tool-shop-org/ClaimLedger</RepositoryUrl>
+    <PackageTags>infrastructure;sqlite;persistence</PackageTags>
   </PropertyGroup>
 
 </Project>

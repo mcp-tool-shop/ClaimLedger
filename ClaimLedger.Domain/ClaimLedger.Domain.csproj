@@ -8,6 +8,15 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+
+    <!-- Package metadata -->
+    <Description>Domain model for ClaimLedger - cryptographic provenance for scientific claims, citations, and timestamps.</Description>
+    <Authors>mcp-tool-shop</Authors>
+    <Company>MCP Tool Shop</Company>
+    <Copyright>Copyright (c) 2025-2026 MCP Tool Shop</Copyright>
+    <PackageProjectUrl>https://github.com/mcp-tool-shop-org/ClaimLedger</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/mcp-tool-shop-org/ClaimLedger</RepositoryUrl>
+    <PackageTags>domain;claims;provenance;cryptography;ddd</PackageTags>
   </PropertyGroup>
 
 </Project>
